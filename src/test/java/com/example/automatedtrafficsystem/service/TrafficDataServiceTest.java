@@ -97,7 +97,8 @@ public class TrafficDataServiceTest {
     @Test
     void getTopThreeHalfHours_ShouldReturnTopThreeRecords() {
         // Arrange
-        when(trafficDataRepository.findTopByCarCount(3)).thenReturn(Arrays.asList(data2, data3, data1));
+        when(trafficDataRepository.findTop3ByOrderByCarCountDesc())
+            .thenReturn(Arrays.asList(data2, data3, data1));
         
         // Act
         List<TrafficData> topThree = trafficDataService.getTopThreeHalfHours();
@@ -105,7 +106,7 @@ public class TrafficDataServiceTest {
         // Assert
         assertEquals(3, topThree.size());
         assertEquals(20, topThree.get(0).getCarCount()); // Highest count first
-        verify(trafficDataRepository, times(1)).findTopByCarCount(3);
+        verify(trafficDataRepository, times(1)).findTop3ByOrderByCarCountDesc();
     }
 
     @Test
