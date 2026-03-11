@@ -16,6 +16,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -40,7 +41,6 @@ public class TrafficAIControllerTest {
 
     @Test
     void analyzeTrafficPatterns_WithValidDates_ShouldReturnAnalysis() throws Exception {
-        // Arrange
         String analysisResult = "Traffic analysis result";
         LocalDate startDate = today.minusDays(7);
         LocalDate endDate = today;
@@ -48,7 +48,6 @@ public class TrafficAIControllerTest {
         when(trafficAnalysisService.analyzeTrafficPatterns(startDate, endDate))
             .thenReturn(analysisResult);
 
-        // Act & Assert
         mockMvc.perform(get("/api/ai/traffic/analyze")
                 .param("startDate", startDate.toString())
                 .param("endDate", endDate.toString()))
@@ -59,7 +58,6 @@ public class TrafficAIControllerTest {
 
     @Test
     void predictTraffic_WithValidTimeRange_ShouldReturnPrediction() throws Exception {
-        // Arrange
         LocalDateTime startTime = now.plusHours(1);
         LocalDateTime endTime = now.plusHours(2);
         TrafficPrediction prediction = TrafficPrediction.builder()
@@ -78,7 +76,6 @@ public class TrafficAIControllerTest {
         when(trafficAnalysisService.predictTraffic(startTime, endTime))
             .thenReturn(prediction);
 
-        // Act & Assert
         mockMvc.perform(get("/api/ai/traffic/predict")
                 .param("startTime", startTime.toString())
                 .param("endTime", endTime.toString()))
@@ -91,5 +88,18 @@ public class TrafficAIControllerTest {
                 .andExpect(jsonPath("$.details").value("High traffic expected due to rush hour"))
                 .andExpect(jsonPath("$.averageSpeed").value(25.5))
                 .andExpect(jsonPath("$.expectedVolume").value(150));
+    }
+
+    @Test
+    void predictTraffic_WithInsufficientData_ShouldReturnUnprocessableEntity() throws Exception {
+        LocalDateTime startTime = now.plusHours(1);
+        LocalDateTime endTime = now.plusHours(2);
+        when(trafficAnalysisService.predictTraffic(any(), any()))
+                .thenThrow(new IllegalStateException("Insufficient historical data for prediction"));
+
+        mockMvc.perform(get("/api/ai/traffic/predict")
+                        .param("startTime", startTime.toString())
+                        .param("endTime", endTime.toString()))
+                .andExpect(status().isUnprocessableEntity());
     }
 }

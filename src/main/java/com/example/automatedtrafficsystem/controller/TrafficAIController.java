@@ -65,7 +65,7 @@ public class TrafficAIController {
         @ApiResponse(responseCode = "200", description = "Successfully predicted traffic",
                     content = @Content(schema = @Schema(implementation = TrafficPrediction.class))),
         @ApiResponse(responseCode = "400", description = "Invalid time range provided"),
-        @ApiResponse(responseCode = "404", description = "Insufficient data for prediction"),
+        @ApiResponse(responseCode = "422", description = "Insufficient data for prediction"),
         @ApiResponse(responseCode = "500", description = "Internal server error")
     })
     public ResponseEntity<TrafficPrediction> predictTraffic(
@@ -82,7 +82,12 @@ public class TrafficAIController {
         }
         
         log.info("Predicting traffic from {} to {}", startTime, endTime);
-        TrafficPrediction prediction = trafficAnalysisService.predictTraffic(startTime, endTime);
+        TrafficPrediction prediction;
+        try {
+            prediction = trafficAnalysisService.predictTraffic(startTime, endTime);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage(), ex);
+        }
         return ResponseEntity.ok(prediction);
     }
 }

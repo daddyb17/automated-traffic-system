@@ -15,7 +15,6 @@ public class PaginationUtil {
     public static final String DEFAULT_SORT_DIRECTION = "asc";
 
     private PaginationUtil() {
-        // Private constructor to prevent instantiation
     }
 
     public static Pageable createPageable(int page, int size, String sortBy, String sortDirection) {
@@ -40,7 +39,6 @@ public class PaginationUtil {
     @Setter
     @Getter
     public static class PagedResponse<T> {
-        // Getters and Setters
         private int pageNumber;
         private int pageSize;
         private long totalElements;

@@ -5,6 +5,7 @@ import com.example.automatedtrafficsystem.model.TrafficData;
 import com.example.automatedtrafficsystem.service.TrafficDataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
@@ -17,22 +18,28 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 @Slf4j
+@Validated
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api")
 public class TrafficDataController {
+
+    private static final int MAX_PAGE_SIZE = 200;
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("id", "timestamp", "carCount", "createdAt");
 
     private final TrafficDataService trafficDataService;
 
@@ -42,41 +49,25 @@ public class TrafficDataController {
                 produces = MediaType.TEXT_PLAIN_VALUE)
     @Operation(summary = "Upload traffic data from a file",
               description = "Uploads a text file containing timestamp and car count pairs")
-    public ResponseEntity<?> uploadTrafficData(
+    public ResponseEntity<String> uploadTrafficData(
             @PathVariable(required = false) String version,
             @Parameter(description = "Traffic data file to upload")
             @RequestParam("file") MultipartFile file) {
         log.info("Received file upload request: {}", file.getOriginalFilename());
         
         if (file.isEmpty()) {
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("message", "File cannot be empty");
-            errorResponse.put("errorCode", "BAD_REQUEST");
-            errorResponse.put("timestamp", LocalDateTime.now().toString());
-            errorResponse.put("details", "The uploaded file is empty");
-            
-            return ResponseEntity.badRequest()
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(errorResponse);
+            throw new IllegalArgumentException("File cannot be empty");
         }
 
         try {
-            String content = new String(file.getBytes());
+            String content = new String(file.getBytes(), StandardCharsets.UTF_8);
             trafficDataService.processTrafficDataFile(content);
             return ResponseEntity.status(HttpStatus.CREATED)
                     .contentType(MediaType.TEXT_PLAIN)
                     .body("File processed successfully");
         } catch (IOException e) {
             log.error("Error processing file: {}", e.getMessage(), e);
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("message", "Failed to process file");
-            errorResponse.put("errorCode", "INTERNAL_SERVER_ERROR");
-            errorResponse.put("timestamp", LocalDateTime.now().toString());
-            errorResponse.put("details", e.getMessage());
-            
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(errorResponse);
+            throw new IllegalStateException("Failed to process file", e);
         }
     }
 
@@ -84,7 +75,7 @@ public class TrafficDataController {
     @GetMapping("/v{version}/traffic/total")
     @Operation(summary = "Get total number of cars",
               description = "Returns the sum of all car counts in the system")
-    public ResponseEntity<Integer> getTotalCars(@PathVariable String version) {
+    public ResponseEntity<Long> getTotalCars(@PathVariable String version) {
         log.info("Received request to get total number of cars");
         return ResponseEntity.ok(trafficDataService.getTotalCars());
     }
@@ -93,10 +84,10 @@ public class TrafficDataController {
     @GetMapping("/v{version}/traffic/daily")
     @Operation(summary = "Get daily car counts",
               description = "Returns a map of dates to total car counts for each day")
-    public ResponseEntity<Map<String, Integer>> getDailyCarCounts(@PathVariable String version) {
+    public ResponseEntity<Map<String, Long>> getDailyCarCounts(@PathVariable String version) {
         log.info("Received request to get daily car counts");
-        Map<LocalDate, Integer> dailyCounts = trafficDataService.getDailyCarCounts();
-        Map<String, Integer> result = new TreeMap<>();
+        Map<LocalDate, Long> dailyCounts = trafficDataService.getDailyCarCounts();
+        Map<String, Long> result = new TreeMap<>();
         dailyCounts.forEach((date, count) -> result.put(date.toString(), count));
         return ResponseEntity.ok(result);
     }
@@ -106,13 +97,22 @@ public class TrafficDataController {
     @Operation(summary = "Get all traffic data with pagination")
     public ResponseEntity<Page<TrafficData>> getTrafficData(
             @PathVariable String version,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
             @RequestParam(defaultValue = "timestamp,desc") String sort) {
         
-        Sort.Direction direction = sort.endsWith("desc") ? Sort.Direction.DESC : Sort.Direction.ASC;
-        String sortBy = sort.split(",")[0];
-        Pageable pageable = PageRequest.of(page, size, direction, sortBy);
+        String[] sortParts = sort.split(",");
+        String sortBy = sortParts[0].trim();
+        Sort.Direction direction = (sortParts.length > 1 && "asc".equalsIgnoreCase(sortParts[1].trim()))
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
+
+        if (!ALLOWED_SORT_FIELDS.contains(sortBy)) {
+            log.warn("Unsupported sort field '{}' requested. Falling back to 'timestamp'", sortBy);
+            sortBy = "timestamp";
+        }
+
+        Pageable pageable = PageRequest.of(page, size, Sort.by(direction, sortBy));
         
         Page<TrafficData> trafficData = trafficDataService.getAllTrafficData(pageable);
         return ResponseEntity.ok(trafficData);
@@ -148,7 +148,7 @@ public class TrafficDataController {
         
         log.info("Received request to add traffic data - Timestamp: {}, Car Count: {}", timestamp, carCount);
         TrafficData savedData = trafficDataService.saveTrafficData(timestamp, carCount);
-        return ResponseEntity.ok(savedData);
+        return ResponseEntity.status(HttpStatus.CREATED).body(savedData);
     }
 
     @ApiVersion(2)

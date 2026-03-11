@@ -7,9 +7,6 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-/**
- * Represents the prediction result for traffic conditions.
- */
 @Data
 @Builder
 @NoArgsConstructor

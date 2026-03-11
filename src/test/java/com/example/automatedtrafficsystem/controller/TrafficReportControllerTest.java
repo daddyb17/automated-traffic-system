@@ -38,7 +38,6 @@ public class TrafficReportControllerTest {
 
     @Test
     void getTextReport_ShouldReturnTextReport() throws Exception {
-        // Arrange
         String reportText = "Total cars seen: 150\n\n" +
                 "Daily car counts:\n" +
                 "2023-10-20 100\n" +
@@ -50,7 +49,6 @@ public class TrafficReportControllerTest {
                 
         when(trafficReportService.generateReport()).thenReturn(reportText);
 
-        // Act & Assert
         mockMvc.perform(get("/api/reports")
                 .header("Accept", "text/plain"))
                 .andExpect(status().isOk())
@@ -62,7 +60,6 @@ public class TrafficReportControllerTest {
 
     @Test
     void getJsonReport_ShouldReturnJsonReport() throws Exception {
-        // Arrange
         Map<String, Object> reportData = new HashMap<>();
         reportData.put("totalCars", 150);
         
@@ -73,7 +70,6 @@ public class TrafficReportControllerTest {
         
         when(trafficReportService.getReportAsJson()).thenReturn(reportData);
 
-        // Act & Assert
         mockMvc.perform(get("/api/reports")
                 .header("Accept", "application/json"))
                 .andExpect(status().isOk())
@@ -86,7 +82,6 @@ public class TrafficReportControllerTest {
 
     @Test
     void getReport_WithUnacceptableMediaType_ShouldReturnNotAcceptable() throws Exception {
-        // Act & Assert
         mockMvc.perform(get("/api/reports")
                 .header("Accept", "application/xml"))
                 .andExpect(status().isNotAcceptable());
@@ -94,10 +89,8 @@ public class TrafficReportControllerTest {
 
     @Test
     void getJsonReport_WithEmptyData_ShouldReturnEmptyJson() throws Exception {
-        // Arrange
         when(trafficReportService.getReportAsJson()).thenReturn(Collections.emptyMap());
 
-        // Act & Assert
         mockMvc.perform(get("/api/reports")
                 .header("Accept", "application/json"))
                 .andExpect(status().isOk())
@@ -106,10 +99,8 @@ public class TrafficReportControllerTest {
 
     @Test
     void getTextReport_WithEmptyData_ShouldReturnEmptyString() throws Exception {
-        // Arrange
         when(trafficReportService.generateReport()).thenReturn("");
 
-        // Act & Assert
         mockMvc.perform(get("/api/reports")
                 .header("Accept", "text/plain"))
                 .andExpect(status().isOk())

@@ -11,7 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -20,66 +20,45 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class TrafficDataService {
 
+    private static final int CONTIGUOUS_PERIOD_RECORDS = 3;
     private final TrafficDataRepository trafficDataRepository;
 
     @Transactional
     public TrafficData saveTrafficData(LocalDateTime timestamp, int carCount) {
         log.debug("Saving traffic data - Timestamp: {}, Car Count: {}", timestamp, carCount);
-        
-        // Input validation
+
         if (timestamp == null) {
             throw new IllegalArgumentException("Timestamp cannot be null");
         }
         if (carCount < 0) {
             throw new IllegalArgumentException("Car count cannot be negative");
         }
-        
-        // Check for existing data at the same timestamp
-        trafficDataRepository.findByTimestamp(timestamp).ifPresent(data -> {
+        if (trafficDataRepository.existsByTimestamp(timestamp)) {
             throw new IllegalArgumentException("Traffic data already exists for timestamp: " + timestamp);
-        });
-        
+        }
+
         TrafficData trafficData = new TrafficData();
         trafficData.setTimestamp(timestamp);
         trafficData.setCarCount(carCount);
-        
+
         return trafficDataRepository.save(trafficData);
     }
 
     @Transactional(readOnly = true)
-    public int getTotalCars() {
+    public long getTotalCars() {
         log.debug("Calculating total number of cars");
-        List<TrafficData> allData = trafficDataRepository.findAll();
-        
-        if (allData == null || allData.isEmpty()) {
-            log.info("No traffic data found");
-            return 0;
-        }
-        
-        return allData.stream()
-                .filter(Objects::nonNull)
-                .mapToInt(data -> data.getCarCount() != null ? data.getCarCount() : 0)
-                .sum();
+        return trafficDataRepository.getTotalCars();
     }
 
     @Transactional(readOnly = true)
-    public Map<LocalDate, Integer> getDailyCarCounts() {
+    public Map<LocalDate, Long> getDailyCarCounts() {
         log.debug("Retrieving daily car counts");
-        List<TrafficData> allData = trafficDataRepository.findAll();
-        
-        if (allData == null || allData.isEmpty()) {
-            log.info("No traffic data found for daily counts");
-            return Collections.emptyMap();
+
+        TreeMap<LocalDate, Long> result = new TreeMap<>();
+        for (TrafficDataRepository.DailyTrafficTotalView row : trafficDataRepository.findDailyTrafficTotals()) {
+            result.put(LocalDate.parse(row.getTrafficDate()), row.getTotalCars());
         }
-        
-        return allData.stream()
-                .filter(Objects::nonNull)
-                .filter(data -> data.getTimestamp() != null && data.getCarCount() != null)
-                .collect(Collectors.groupingBy(
-                        data -> data.getTimestamp().toLocalDate(),
-                        TreeMap::new,
-                        Collectors.summingInt(TrafficData::getCarCount)
-                ));
+        return result;
     }
 
     @Transactional(readOnly = true)
@@ -87,103 +66,140 @@ public class TrafficDataService {
         log.debug("Retrieving top three half-hour periods with most cars");
         return trafficDataRepository.findTop3ByOrderByCarCountDesc();
     }
-    
+
     @Transactional(readOnly = true)
     public Optional<TrafficData> getTrafficDataById(Long id) {
         log.debug("Retrieving traffic data by id: {}", id);
         return trafficDataRepository.findById(id);
     }
-    
+
     @Transactional(readOnly = true)
     public Page<TrafficData> getAllTrafficData(Pageable pageable) {
-        log.debug("Retrieving paginated traffic data - Page: {}, Size: {}", 
+        log.debug("Retrieving paginated traffic data - Page: {}, Size: {}",
                 pageable.getPageNumber(), pageable.getPageSize());
         return trafficDataRepository.findAll(pageable);
     }
-    
-    
+
     @Transactional(readOnly = true)
     public Map<String, Object> getTrafficStatistics() {
         log.debug("Generating traffic statistics");
+
         List<TrafficData> allData = trafficDataRepository.findAll();
-        
-        Map<String, Object> stats = new HashMap<>();
-        
-        // Basic statistics
-        int totalCars = allData.stream().mapToInt(TrafficData::getCarCount).sum();
-        double avgCarsPerDay = allData.stream()
-                .collect(Collectors.groupingBy(
-                        data -> data.getTimestamp().toLocalDate(),
-                        Collectors.summingInt(TrafficData::getCarCount)
-                ))
-                .values().stream()
-                .mapToInt(Integer::intValue)
+        long totalCars = trafficDataRepository.getTotalCars();
+        double averageCarsPerDay = getDailyCarCounts().values().stream()
+                .mapToLong(Long::longValue)
                 .average()
                 .orElse(0.0);
-                
-        // Peak hours analysis
+
         Map<Integer, Integer> hourlyDistribution = allData.stream()
                 .collect(Collectors.groupingBy(
                         data -> data.getTimestamp().getHour(),
                         Collectors.summingInt(TrafficData::getCarCount)
                 ));
-        
-        // Find peak hour
-        Map.Entry<Integer, Integer> peakHour = hourlyDistribution.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .orElse(null);
-        
+
+        Map<String, Object> stats = new HashMap<>();
         stats.put("totalCars", totalCars);
-        stats.put("averageCarsPerDay", String.format("%.2f", avgCarsPerDay));
+        stats.put("averageCarsPerDay", averageCarsPerDay);
         stats.put("totalRecords", allData.size());
-        
-        if (peakHour != null) {
-            stats.put("peakHour", String.format("%02d:00 - %02:59", peakHour.getKey(), peakHour.getKey()));
-            stats.put("carsInPeakHour", peakHour.getValue());
-        }
-        
+
+        hourlyDistribution.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .ifPresent(peakHour -> {
+                    stats.put("peakHour", String.format("%02d:00 - %02d:59", peakHour.getKey(), peakHour.getKey()));
+                    stats.put("carsInPeakHour", peakHour.getValue());
+                });
+
         return stats;
     }
 
     @Transactional(readOnly = true)
     public List<TrafficData> findLeastCarsContiguousPeriod() {
         List<TrafficData> allData = trafficDataRepository.findAllByOrderByTimestampAsc();
-        if (allData.size() < 3) {
-            return allData;
+        if (allData.size() < CONTIGUOUS_PERIOD_RECORDS) {
+            return List.copyOf(allData);
         }
 
         int minSum = Integer.MAX_VALUE;
-        int minIndex = 0;
+        List<TrafficData> minWindow = List.of();
 
-        for (int i = 0; i <= allData.size() - 3; i++) {
-            int sum = allData.get(i).getCarCount() + 
-                     allData.get(i + 1).getCarCount() + 
-                     allData.get(i + 2).getCarCount();
-            
+        for (int i = 0; i <= allData.size() - CONTIGUOUS_PERIOD_RECORDS; i++) {
+            if (!isThirtyMinuteContiguousWindow(allData, i)) {
+                continue;
+            }
+
+            int sum = allData.get(i).getCarCount()
+                    + allData.get(i + 1).getCarCount()
+                    + allData.get(i + 2).getCarCount();
+
             if (sum < minSum) {
                 minSum = sum;
-                minIndex = i;
+                minWindow = allData.subList(i, i + CONTIGUOUS_PERIOD_RECORDS);
             }
         }
 
-        return allData.subList(minIndex, minIndex + 3);
+        return minWindow;
     }
 
     @Transactional
     public void processTrafficDataFile(String fileContent) {
-        String[] lines = fileContent.split("\\r?\\n");
-        for (String line : lines) {
-            if (line.trim().isEmpty()) continue;
-            
-            String[] parts = line.trim().split("\\s+");
-            if (parts.length != 2) {
-                throw new IllegalArgumentException("Invalid line format: " + line);
-            }
-            
-            LocalDateTime timestamp = LocalDateTime.parse(parts[0]);
-            int carCount = Integer.parseInt(parts[1]);
-            
-            saveTrafficData(timestamp, carCount);
+        if (fileContent == null || fileContent.isBlank()) {
+            throw new IllegalArgumentException("File content cannot be empty");
         }
+
+        String[] lines = fileContent.split("\\r?\\n");
+        Set<LocalDateTime> fileTimestamps = new HashSet<>();
+        List<TrafficData> recordsToSave = new ArrayList<>();
+
+        for (int index = 0; index < lines.length; index++) {
+            String line = lines[index].trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+
+            String[] parts = line.split("\\s+");
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Invalid format at line " + (index + 1) + ". Expected: <timestamp> <carCount>");
+            }
+
+            LocalDateTime timestamp;
+            try {
+                timestamp = LocalDateTime.parse(parts[0]);
+            } catch (DateTimeParseException ex) {
+                throw new IllegalArgumentException("Invalid timestamp at line " + (index + 1) + ": " + parts[0]);
+            }
+
+            int carCount;
+            try {
+                carCount = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException ex) {
+                throw new IllegalArgumentException("Invalid car count at line " + (index + 1) + ": " + parts[1]);
+            }
+
+            if (carCount < 0) {
+                throw new IllegalArgumentException("Car count cannot be negative at line " + (index + 1));
+            }
+            if (!fileTimestamps.add(timestamp)) {
+                throw new IllegalArgumentException("Duplicate timestamp found in file at line " + (index + 1) + ": " + timestamp);
+            }
+            if (trafficDataRepository.existsByTimestamp(timestamp)) {
+                throw new IllegalArgumentException("Traffic data already exists for timestamp: " + timestamp);
+            }
+
+            TrafficData trafficData = new TrafficData();
+            trafficData.setTimestamp(timestamp);
+            trafficData.setCarCount(carCount);
+            recordsToSave.add(trafficData);
+        }
+
+        if (recordsToSave.isEmpty()) {
+            throw new IllegalArgumentException("No valid traffic records found in uploaded file");
+        }
+
+        trafficDataRepository.saveAll(recordsToSave);
+    }
+
+    private boolean isThirtyMinuteContiguousWindow(List<TrafficData> allData, int start) {
+        return allData.get(start).getTimestamp().plusMinutes(30).equals(allData.get(start + 1).getTimestamp())
+                && allData.get(start + 1).getTimestamp().plusMinutes(30).equals(allData.get(start + 2).getTimestamp());
     }
 }

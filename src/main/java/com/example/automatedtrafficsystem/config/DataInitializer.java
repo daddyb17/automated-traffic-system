@@ -4,10 +4,12 @@ import com.example.automatedtrafficsystem.model.TrafficData;
 import com.example.automatedtrafficsystem.repository.TrafficDataRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.context.annotation.Profile;
 import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
@@ -16,6 +18,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 @Configuration
+@Profile("dev")
+@ConditionalOnProperty(name = "app.seed-sample-data", havingValue = "true", matchIfMissing = true)
 @Slf4j
 @RequiredArgsConstructor
 public class DataInitializer {

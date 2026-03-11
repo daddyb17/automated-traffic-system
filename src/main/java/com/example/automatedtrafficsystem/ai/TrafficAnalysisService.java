@@ -2,14 +2,13 @@ package com.example.automatedtrafficsystem.ai;
 
 import com.example.automatedtrafficsystem.model.TrafficData;
 import com.example.automatedtrafficsystem.repository.TrafficDataRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.ChatClient;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -24,29 +23,23 @@ import java.util.stream.Collectors;
 @Slf4j
 public class TrafficAnalysisService {
 
+    @Nullable
     private final ChatClient chatClient;
     private final TrafficDataRepository trafficDataRepository;
-    private final ObjectMapper objectMapper;
     
     @Value("classpath:/prompts/traffic-analysis-prompt.st")
     private Resource trafficAnalysisPrompt;
-
-    @Value("classpath:/prompts/traffic-prediction-prompt.st")
-    private Resource trafficPredictionPrompt;
     
-    @Autowired
     public TrafficAnalysisService(
-            ChatClient chatClient,
-            TrafficDataRepository trafficDataRepository,
-            ObjectMapper objectMapper) {
+            @Nullable ChatClient chatClient,
+            TrafficDataRepository trafficDataRepository) {
         this.chatClient = chatClient;
         this.trafficDataRepository = trafficDataRepository;
-        this.objectMapper = objectMapper;
     }
 
     public String analyzeTrafficPatterns(LocalDate startDate, LocalDate endDate) {
         List<TrafficData> trafficData = trafficDataRepository
-                .findByTimestampBetween(
+                .findByTimestampGreaterThanEqualAndTimestampLessThanOrderByTimestampAsc(
                         startDate.atStartOfDay(),
                         endDate.plusDays(1).atStartOfDay()
                 );
@@ -56,7 +49,11 @@ public class TrafficAnalysisService {
         }
 
         Map<String, Object> context = createAnalysisContext(trafficData, startDate, endDate);
-        
+
+        if (chatClient == null) {
+            return "AI analysis is currently unavailable because the OpenAI client is not configured.";
+        }
+
         try {
             PromptTemplate promptTemplate = new PromptTemplate(trafficAnalysisPrompt);
             Prompt prompt = promptTemplate.create(context);
@@ -68,9 +65,8 @@ public class TrafficAnalysisService {
     }
 
     public TrafficPrediction predictTraffic(LocalDateTime startTime, LocalDateTime endTime) {
-        // Get historical data (last 30 days)
         List<TrafficData> historicalData = trafficDataRepository
-                .findByTimestampBetween(
+                .findByTimestampGreaterThanEqualAndTimestampLessThanOrderByTimestampAsc(
                         startTime.minusDays(30),
                         startTime
                 );
@@ -79,7 +75,6 @@ public class TrafficAnalysisService {
             throw new IllegalStateException("Insufficient historical data for prediction");
         }
 
-        // Calculate basic statistics
         double avgCars = historicalData.stream()
                 .mapToInt(TrafficData::getCarCount)
                 .average()
@@ -90,7 +85,6 @@ public class TrafficAnalysisService {
                 .max()
                 .orElse(0);
         
-        // Simple prediction logic (can be enhanced with ML model)
         String trafficCondition;
         double confidence;
         
@@ -105,46 +99,39 @@ public class TrafficAnalysisService {
             confidence = 0.80;
         }
         
-        // Calculate expected travel time (simplified)
-        int baseTravelTime = 15; // minutes
+        int baseTravelTime = 15;
         double trafficFactor = 1.0 + (avgCars / 50.0);
         int expectedTravelTime = (int) (baseTravelTime * trafficFactor);
-        
-        // Build and return prediction
+
         return TrafficPrediction.builder()
                 .startTime(startTime)
                 .endTime(endTime)
                 .trafficCondition(trafficCondition)
                 .confidenceScore(confidence)
                 .averageSpeed(calculateAverageSpeed(avgCars))
-                .expectedVolume((int) (avgCars * 0.8)) // 80% of average as prediction
+                .expectedVolume((int) (avgCars * 0.8))
                 .expectedTravelTimeMinutes(expectedTravelTime)
                 .details(String.format("Prediction based on %d historical data points", historicalData.size()))
                 .build();
     }
     
     private double calculateAverageSpeed(double avgCars) {
-        // Simple model: speed decreases as traffic increases
-        // Base speed of 60 km/h, reducing with traffic
         return Math.max(10, 60 - (avgCars * 0.5));
     }
 
     private Map<String, Object> createAnalysisContext(List<TrafficData> trafficData, LocalDate startDate, LocalDate endDate) {
         Map<String, Object> context = new HashMap<>();
-        
-        // Basic statistics
+
         int totalCars = trafficData.stream().mapToInt(TrafficData::getCarCount).sum();
         double averageCars = trafficData.stream().mapToInt(TrafficData::getCarCount).average().orElse(0);
-        
-        // Format sample data (first 5 records)
+
         String sampleDataStr = trafficData.stream()
                 .limit(5)
                 .map(data -> String.format("- %s: %d cars", 
                     data.getTimestamp().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME), 
                     data.getCarCount()))
                 .collect(Collectors.joining("\n"));
-        
-        // Format daily averages
+
         String dailyAveragesStr = trafficData.stream()
                 .collect(Collectors.groupingBy(
                         data -> data.getTimestamp().getDayOfWeek().name(),
@@ -152,8 +139,7 @@ public class TrafficAnalysisService {
                 .entrySet().stream()
                 .map(e -> String.format("- %s: %.1f cars", e.getKey(), e.getValue()))
                 .collect(Collectors.joining("\n"));
-                
-        // Format hourly averages
+
         String hourlyAveragesStr = trafficData.stream()
                 .collect(Collectors.groupingBy(
                         data -> data.getTimestamp().getHour(),
@@ -162,8 +148,7 @@ public class TrafficAnalysisService {
                 .sorted(Map.Entry.comparingByKey())
                 .map(e -> String.format("- %02d:00 - %.1f cars", e.getKey(), e.getValue()))
                 .collect(Collectors.joining("\n"));
-        
-        // Add formatted data to context
+
         context.put("startDate", startDate);
         context.put("endDate", endDate);
         context.put("totalRecords", trafficData.size());
@@ -172,33 +157,6 @@ public class TrafficAnalysisService {
         context.put("sampleData", sampleDataStr);
         context.put("dailyAverages", dailyAveragesStr);
         context.put("hourlyAverages", hourlyAveragesStr);
-        
-        return context;
-    }
-
-    private Map<String, Object> createPredictionContext(List<TrafficData> historicalData, 
-                                                       LocalDateTime startTime, LocalDateTime endTime) {
-        Map<String, Object> context = new HashMap<>();
-        
-        // Prepare historical data for the model
-        List<Map<String, Object>> historicalPoints = historicalData.stream()
-                .map(data -> {
-                    Map<String, Object> map = new HashMap<>();
-                    map.put("timestamp", data.getTimestamp().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-                    map.put("carCount", data.getCarCount());
-                    map.put("dayOfWeek", data.getTimestamp().getDayOfWeek().name());
-                    map.put("hourOfDay", data.getTimestamp().getHour());
-                    return map;
-                })
-                .collect(Collectors.toList());
-
-        context.put("historicalData", historicalPoints);
-        context.put("predictionStartTime", startTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        context.put("predictionEndTime", endTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        
-        // Add metadata about the prediction request
-        context.put("predictionRequestTime", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        context.put("dataPointsCount", historicalData.size());
         
         return context;
     }
